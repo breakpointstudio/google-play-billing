@@ -46,6 +46,9 @@ php artisan vendor:publish --tag=google-play-billing-config   # optional
 | `rtdn.dedupe_ttl` | `GOOGLE_PLAY_RTDN_DEDUPE_TTL` | `3600` |
 | `rtdn.retries` | `GOOGLE_PLAY_RTDN_RETRIES` | `5` |
 | `rtdn.retry_delay` | `GOOGLE_PLAY_RTDN_RETRY_DELAY` | `3` |
+| `rtdn.push_auth.enabled` | `GOOGLE_PLAY_RTDN_PUSH_AUTH` | `false` |
+| `rtdn.push_auth.audience` | `GOOGLE_PLAY_RTDN_PUSH_AUDIENCE` | `null` |
+| `rtdn.push_auth.service_account_email` | `GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT` | `null` |
 
 `retries`/`retry_delay` govern re-fetching the purchase from Google, which is routinely 503 for a
 few seconds after a notification arrives.
@@ -102,6 +105,7 @@ Its status codes are a deliberate contract:
 
 | Situation | Status | Why |
 | --- | --- | --- |
+| Push authentication on and the OIDC token missing or wrong | 401 | Not from our subscription |
 | Malformed envelope, or another package | 422 | Not ours; retrying will never help |
 | Notification type we do not model | 200 (logged) | A 422 here burns Google's retry budget on forward-compatibility |
 | Redelivery of a `messageId` already handled | 200 | Pub/Sub delivers at least once |
@@ -116,6 +120,15 @@ Event::listen(\Breakpoint\GooglePlay\Events\SubscriptionRenewed::class, RecordRe
 ```
 
 `UnknownNotification` is dispatched for anything unmodelled, so nothing is silently dropped.
+
+### Push authentication
+
+Pub/Sub can attach an OIDC token to every push when the subscription is created with a service
+account. Verification of that token is **off by default**, because a subscription without one
+sends no `Authorization` header at all and enabling the check early rejects every notification.
+Configure the subscription first, then set `GOOGLE_PLAY_RTDN_PUSH_AUTH=true` along with the
+audience the subscription was created with and the service account's email. The re-fetch from
+Google stays the hard guarantee either way — the token only proves who is calling.
 
 ## Testing
 

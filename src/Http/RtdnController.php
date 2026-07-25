@@ -21,13 +21,17 @@ use Throwable;
 
 /**
  * Decodes the Pub/Sub push, re-fetches the purchase from Google, and dispatches one typed event.
- * Contract: malformed → 422, unmodelled → logged 200 (never 422 — that burns Google's retries),
- * re-fetch exhausted → 503 so Pub/Sub retries, listener throws → 500.
+ * Contract: unauthenticated → 401, malformed → 422, unmodelled → logged 200 (never 422 — that
+ * burns Google's retries), re-fetch exhausted → 503 so Pub/Sub retries, listener throws → 500.
  */
 class RtdnController
 {
-    public function __invoke(Request $request, GooglePlayManager $manager): JsonResponse
+    public function __invoke(Request $request, GooglePlayManager $manager, PushAuthenticator $auth): JsonResponse
     {
+        if ($auth->enabled() && ! $auth->verify($request)) {
+            return response()->json([], 401);
+        }
+
         $envelope = $request->json()->all();
         $data = data_get($envelope, 'message.data');
 
