@@ -1,0 +1,8 @@
+# `tests/` deliberately ships: tests/Support carries the fakes and fixtures host apps build on.
+/.editorconfig     export-ignore
+/.gitattributes    export-ignore
+/.github           export-ignore
+/.gitignore        export-ignore
+
+* text=auto eol=lf
+*.php diff=php
