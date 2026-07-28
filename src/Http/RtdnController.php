@@ -182,12 +182,13 @@ class RtdnController
     }
 
     /**
-     * Google is routinely 503 for a few seconds after sending a notification.
+     * Google is routinely 503 for a few seconds after sending a notification, but waiting it out
+     * here costs the ack deadline; one attempt and a 503 hands the wait to Pub/Sub's own backoff.
      */
     protected function fetchSubscription(GooglePlayManager $manager, string $subscriptionId, string $purchaseToken): ?SubscriptionResponse
     {
-        $attempts = (int) config('google-play-billing.rtdn.retries', 5);
-        $delay = (int) config('google-play-billing.rtdn.retry_delay', 3);
+        $attempts = (int) config('google-play-billing.rtdn.retries', 1);
+        $delay = (int) config('google-play-billing.rtdn.retry_delay', 0);
 
         for ($attempt = 1; $attempt <= max(1, $attempts); $attempt++) {
             try {
@@ -203,7 +204,10 @@ class RtdnController
             }
         }
 
-        Log::error('Google RTDN re-fetch exhausted retries.', ['subscriptionId' => $subscriptionId]);
+        Log::error('Google RTDN re-fetch failed; asking Pub/Sub to redeliver.', [
+            'subscriptionId' => $subscriptionId,
+            'attempts' => max(1, $attempts),
+        ]);
 
         return null;
     }

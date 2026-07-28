@@ -43,15 +43,22 @@ php artisan vendor:publish --tag=google-play-billing-config   # optional
 | `credentials_path` | `GOOGLE_PLAY_CREDENTIALS_PATH` | `storage_path('app/google_play_service.json')` |
 | `package_name` | `GOOGLE_PLAY_PACKAGE_NAME` | `com.consumedbycode.slopes` |
 | `application_name` | `GOOGLE_PLAY_APPLICATION_NAME` | `Slopes` |
+| `http.connect_timeout` | `GOOGLE_PLAY_CONNECT_TIMEOUT` | `3` |
+| `http.timeout` | `GOOGLE_PLAY_TIMEOUT` | `6` |
 | `rtdn.dedupe_ttl` | `GOOGLE_PLAY_RTDN_DEDUPE_TTL` | `3600` |
-| `rtdn.retries` | `GOOGLE_PLAY_RTDN_RETRIES` | `5` |
-| `rtdn.retry_delay` | `GOOGLE_PLAY_RTDN_RETRY_DELAY` | `3` |
+| `rtdn.retries` | `GOOGLE_PLAY_RTDN_RETRIES` | `1` |
+| `rtdn.retry_delay` | `GOOGLE_PLAY_RTDN_RETRY_DELAY` | `0` |
 | `rtdn.push_auth.enabled` | `GOOGLE_PLAY_RTDN_PUSH_AUTH` | `false` |
 | `rtdn.push_auth.audience` | `GOOGLE_PLAY_RTDN_PUSH_AUDIENCE` | `null` |
 | `rtdn.push_auth.service_account_email` | `GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT` | `null` |
 
+`http.*` bounds every call to Google. The client library itself sets no timeout at all, so without
+these one hung request holds the caller until PHP gives up.
+
 `retries`/`retry_delay` govern re-fetching the purchase from Google, which is routinely 503 for a
-few seconds after a notification arrives.
+few seconds after a notification arrives. They default to a single attempt: a push subscription's ack
+deadline (10s by default) is shorter than that 503 window, so sleeping through it inside the request
+only converts a fast redelivery into a slow one. Raise them only for callers with no ack deadline.
 
 ## Validating a purchase
 
@@ -109,7 +116,7 @@ Its status codes are a deliberate contract:
 | Malformed envelope, or another package | 422 | Not ours; retrying will never help |
 | Notification type we do not model | 200 (logged) | A 422 here burns Google's retry budget on forward-compatibility |
 | Redelivery of a `messageId` already handled | 200 | Pub/Sub delivers at least once |
-| Re-fetch from Google exhausted its retries | 503 | Pub/Sub should try again later |
+| Re-fetch from Google failed | 503 | Pub/Sub should try again later, on its own backoff |
 | A listener threw | 500 | Same — earn the retry rather than swallow the failure |
 
 Listen for what you care about; every event carries the decoded notification plus the re-fetched

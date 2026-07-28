@@ -8,6 +8,8 @@ use Breakpoint\GooglePlay\Exceptions\ValidationException;
 use Google\Client;
 use Google\Service\AndroidPublisher;
 use Google\Service\AndroidPublisher\SubscriptionPurchasesAcknowledgeRequest;
+use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\RequestOptions;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -19,7 +21,7 @@ class GooglePlayManager
     private ?AndroidPublisher $androidPublisher = null;
 
     /**
-     * @param  array{credentials_path?: ?string, package_name?: ?string, application_name?: ?string}  $config
+     * @param  array{credentials_path?: ?string, package_name?: ?string, application_name?: ?string, http?: array{connect_timeout?: int|float, timeout?: int|float}}  $config
      */
     public function __construct(
         private array $config,
@@ -72,7 +74,26 @@ class GooglePlayManager
         $client->setScopes([AndroidPublisher::ANDROIDPUBLISHER]);
         $client->setApplicationName($this->config['application_name'] ?? 'Slopes');
         $client->setAuthConfig($credentials);
+        $client->setHttpClient($this->httpClient($client));
 
         return $client;
+    }
+
+    /**
+     * Google's own default client sets no timeout at all, so one hung request holds the caller
+     * indefinitely — past any Pub/Sub ack deadline, which defaults to 10s.
+     */
+    protected function httpClient(Client $client): GuzzleClient
+    {
+        $http = $this->config['http'] ?? [];
+
+        return new GuzzleClient([
+            // Carried over from Google's own default, never invented: its services resolve
+            // against it, and `attachToHttp()` rebuilds this config when it adds auth middleware.
+            'base_uri' => $client->getConfig('base_path'),
+            RequestOptions::HTTP_ERRORS => false,
+            RequestOptions::CONNECT_TIMEOUT => (float) ($http['connect_timeout'] ?? 3),
+            RequestOptions::TIMEOUT => (float) ($http['timeout'] ?? 6),
+        ]);
     }
 }

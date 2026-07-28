@@ -214,8 +214,9 @@ class RtdnControllerTest extends TestCase
         Event::assertDispatchedTimes(Events\SubscriptionRenewed::class, 1);
     }
 
-    public function test_the_refetch_retries_before_giving_up(): void
+    public function test_the_refetch_retries_before_giving_up_when_retries_are_configured(): void
     {
+        config(['google-play-billing.rtdn.retries' => 3]);
         $validator = new FakeValidator(new SubscriptionResponse(Fixtures::subscriptionPurchase()), failuresBeforeSuccess: 2);
         $this->app->instance(GooglePlayManager::class, new FakeGooglePlayManager($validator));
 
@@ -224,6 +225,18 @@ class RtdnControllerTest extends TestCase
 
         $this->assertSame(3, $validator->subscriptionCalls);
         Event::assertDispatched(Events\SubscriptionRenewed::class);
+    }
+
+    public function test_the_refetch_makes_one_attempt_by_default(): void
+    {
+        $validator = new FakeValidator(new SubscriptionResponse(Fixtures::subscriptionPurchase()), failuresBeforeSuccess: 1);
+        $this->app->instance(GooglePlayManager::class, new FakeGooglePlayManager($validator));
+
+        $this->postJson(self::ENDPOINT, Fixtures::subscriptionEnvelope(NotificationType::RENEWED->value))
+            ->assertStatus(503);
+
+        $this->assertSame(1, $validator->subscriptionCalls);
+        Event::assertNotDispatched(Events\SubscriptionRenewed::class);
     }
 
     public function test_an_exhausted_refetch_returns_503_so_pubsub_retries(): void
