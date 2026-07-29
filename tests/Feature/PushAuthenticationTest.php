@@ -9,7 +9,7 @@ use Breakpoint\GooglePlay\Events;
 use Breakpoint\GooglePlay\GooglePlayManager;
 use Breakpoint\GooglePlay\Http\PushAuthenticator;
 use Breakpoint\GooglePlay\Http\RtdnController;
-use Breakpoint\GooglePlay\Responses\SubscriptionResponse;
+use Breakpoint\GooglePlay\Responses\SubscriptionV2Response;
 use Breakpoint\GooglePlay\Tests\Support\FakeGooglePlayManager;
 use Breakpoint\GooglePlay\Tests\Support\FakeValidator;
 use Breakpoint\GooglePlay\Tests\Support\Fixtures;
@@ -31,7 +31,7 @@ class PushAuthenticationTest extends TestCase
 
         $this->app->instance(
             GooglePlayManager::class,
-            new FakeGooglePlayManager(new FakeValidator(new SubscriptionResponse(Fixtures::subscriptionPurchase()))),
+            new FakeGooglePlayManager(new FakeValidator(new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2()))),
         );
 
         Route::post(self::ENDPOINT, RtdnController::class);

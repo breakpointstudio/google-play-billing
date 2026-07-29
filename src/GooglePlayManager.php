@@ -7,6 +7,7 @@ namespace Breakpoint\GooglePlay;
 use Breakpoint\GooglePlay\Exceptions\ValidationException;
 use Google\Client;
 use Google\Service\AndroidPublisher;
+use Google\Service\AndroidPublisher\ProductPurchasesAcknowledgeRequest;
 use Google\Service\AndroidPublisher\SubscriptionPurchasesAcknowledgeRequest;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\RequestOptions;
@@ -59,6 +60,20 @@ class GooglePlayManager
             $productId,
             $purchaseToken,
             new SubscriptionPurchasesAcknowledgeRequest,
+        );
+    }
+
+    /**
+     * Acknowledge, never consume: the Android client owns consumption, and consuming here would race
+     * it and change repurchase behavior.
+     */
+    public function acknowledgeOneTime(string $productId, string $purchaseToken): void
+    {
+        $this->androidPublisher()->purchases_products->acknowledge(
+            $this->packageName(),
+            $productId,
+            $purchaseToken,
+            new ProductPurchasesAcknowledgeRequest,
         );
     }
 

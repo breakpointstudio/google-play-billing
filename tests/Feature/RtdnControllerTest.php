@@ -11,7 +11,7 @@ use Breakpoint\GooglePlay\Enums\RefundType;
 use Breakpoint\GooglePlay\Events;
 use Breakpoint\GooglePlay\GooglePlayManager;
 use Breakpoint\GooglePlay\Http\RtdnController;
-use Breakpoint\GooglePlay\Responses\SubscriptionResponse;
+use Breakpoint\GooglePlay\Responses\SubscriptionV2Response;
 use Breakpoint\GooglePlay\Tests\Support\FakeGooglePlayManager;
 use Breakpoint\GooglePlay\Tests\Support\FakeValidator;
 use Breakpoint\GooglePlay\Tests\Support\Fixtures;
@@ -30,7 +30,7 @@ class RtdnControllerTest extends TestCase
     {
         parent::setUp();
 
-        $this->validator = new FakeValidator(new SubscriptionResponse(Fixtures::subscriptionPurchase()));
+        $this->validator = new FakeValidator(new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2()));
         $this->app->instance(GooglePlayManager::class, new FakeGooglePlayManager($this->validator));
 
         Route::post(self::ENDPOINT, RtdnController::class);
@@ -50,14 +50,54 @@ class RtdnControllerTest extends TestCase
         $this->postJson(self::ENDPOINT, $payload)->assertStatus(422);
     }
 
-    public function test_another_package_is_rejected(): void
+    /**
+     * 200, not 422 — a 422 makes Pub/Sub redeliver for the whole retention window, and this will
+     * never become deliverable. Supersedes the previous 422 expectation (G15).
+     */
+    public function test_another_package_is_accepted_and_logged_rather_than_retried(): void
     {
         $payload = Fixtures::envelope([
             'packageName' => 'com.someoneelse.app',
             'subscriptionNotification' => ['notificationType' => 2, 'purchaseToken' => 't', 'subscriptionId' => 's'],
         ]);
 
-        $this->postJson(self::ENDPOINT, $payload)->assertStatus(422);
+        $this->postJson(self::ENDPOINT, $payload)->assertStatus(200);
+
+        $this->assertSame(0, $this->validator->subscriptionCalls, 'another package must not cost a Google call');
+    }
+
+    /**
+     * Google is removing `subscriptionId` from the notification, so the fetch must not need it.
+     */
+    public function test_the_refetch_is_keyed_on_the_token_alone(): void
+    {
+        $this->postJson(self::ENDPOINT, Fixtures::subscriptionEnvelope(NotificationType::RENEWED->value))
+            ->assertStatus(200);
+
+        $this->assertSame('token-abc-123', $this->validator->lastPurchaseToken);
+        $this->assertNull($this->validator->lastProductId);
+    }
+
+    public function test_a_pending_refund_review_dispatches_rather_than_falling_through_to_unknown(): void
+    {
+        $payload = Fixtures::envelope([
+            'pendingRefundReviewNotification' => [
+                'pendingRefundToken' => 'refund-token-1',
+                'orderId' => 'GPA.1234-5678-9012-34567',
+                'refundReason' => 7,
+                'obfuscatedAccountId' => '018f4e1a-0000-7000-8000-000000000000',
+            ],
+        ]);
+
+        $this->postJson(self::ENDPOINT, $payload)->assertStatus(200);
+
+        Event::assertNotDispatched(Events\UnknownNotification::class);
+        Event::assertDispatched(Events\PendingRefundReview::class, function (Events\PendingRefundReview $event): bool {
+            return $event->pendingRefundToken === 'refund-token-1'
+                && $event->orderId === 'GPA.1234-5678-9012-34567'
+                && $event->obfuscatedAccountId === '018f4e1a-0000-7000-8000-000000000000'
+                && $event->isChargeback();
+        });
     }
 
     public function test_a_renewal_dispatches_a_typed_event_with_the_refetched_subscription(): void
@@ -69,7 +109,8 @@ class RtdnControllerTest extends TestCase
             return $event->type === NotificationType::RENEWED
                 && $event->purchaseToken === 'token-abc-123'
                 && $event->subscriptionId === 'com.consumedbycode.slopes.seasonpass'
-                && $event->subscription->orderId === 'GPA.1111-2222-3333-44444'
+                && $event->subscription->latestSuccessfulOrderId() === 'GPA.1111-2222-3333-44444'
+                && $event->subscription->productId() === 'com.consumedbycode.slopes.seasonpass'
                 && $event->messageId === '9876543210';
         });
     }
@@ -202,7 +243,7 @@ class RtdnControllerTest extends TestCase
     public function test_a_failed_delivery_releases_its_dedupe_claim(): void
     {
         $this->app->instance(GooglePlayManager::class, new FakeGooglePlayManager(
-            new FakeValidator(new SubscriptionResponse(Fixtures::subscriptionPurchase()), failuresBeforeSuccess: 99),
+            new FakeValidator(new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2()), failuresBeforeSuccess: 99),
         ));
         $payload = Fixtures::subscriptionEnvelope(NotificationType::RENEWED->value, 'retry-me');
 
@@ -217,7 +258,7 @@ class RtdnControllerTest extends TestCase
     public function test_the_refetch_retries_before_giving_up_when_retries_are_configured(): void
     {
         config(['google-play-billing.rtdn.retries' => 3]);
-        $validator = new FakeValidator(new SubscriptionResponse(Fixtures::subscriptionPurchase()), failuresBeforeSuccess: 2);
+        $validator = new FakeValidator(new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2()), failuresBeforeSuccess: 2);
         $this->app->instance(GooglePlayManager::class, new FakeGooglePlayManager($validator));
 
         $this->postJson(self::ENDPOINT, Fixtures::subscriptionEnvelope(NotificationType::RENEWED->value))
@@ -229,7 +270,7 @@ class RtdnControllerTest extends TestCase
 
     public function test_the_refetch_makes_one_attempt_by_default(): void
     {
-        $validator = new FakeValidator(new SubscriptionResponse(Fixtures::subscriptionPurchase()), failuresBeforeSuccess: 1);
+        $validator = new FakeValidator(new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2()), failuresBeforeSuccess: 1);
         $this->app->instance(GooglePlayManager::class, new FakeGooglePlayManager($validator));
 
         $this->postJson(self::ENDPOINT, Fixtures::subscriptionEnvelope(NotificationType::RENEWED->value))

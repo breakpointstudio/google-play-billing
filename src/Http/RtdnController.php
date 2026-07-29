@@ -10,7 +10,7 @@ use Breakpoint\GooglePlay\Enums\ProductType;
 use Breakpoint\GooglePlay\Enums\RefundType;
 use Breakpoint\GooglePlay\Events;
 use Breakpoint\GooglePlay\GooglePlayManager;
-use Breakpoint\GooglePlay\Responses\SubscriptionResponse;
+use Breakpoint\GooglePlay\Responses\SubscriptionV2Response;
 use Google\Service\Exception as GoogleServiceException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -48,11 +48,13 @@ class RtdnController
             return response()->json([], 422);
         }
 
+        // 200, not 422: a 422 makes Pub/Sub redeliver this for the whole topic retention window, and
+        // a notification for another package will never become deliverable.
         $packageName = (string) ($notification['packageName'] ?? '');
         if ($packageName !== $manager->packageName()) {
             Log::warning('Google RTDN for another package.', ['packageName' => $packageName]);
 
-            return response()->json([], 422);
+            return response()->json([], 200);
         }
 
         $messageId = data_get($envelope, 'message.messageId') ?? data_get($envelope, 'message.message_id');
@@ -108,6 +110,22 @@ class RtdnController
             return response()->json([], 200);
         }
 
+        if (is_array($notification['pendingRefundReviewNotification'] ?? null)) {
+            $review = $notification['pendingRefundReviewNotification'];
+            Event::dispatch(new Events\PendingRefundReview(
+                $notification,
+                $packageName,
+                (string) ($review['pendingRefundToken'] ?? ''),
+                isset($review['orderId']) ? (string) $review['orderId'] : null,
+                isset($review['refundReason']) ? (int) $review['refundReason'] : null,
+                isset($review['obfuscatedAccountId']) ? (string) $review['obfuscatedAccountId'] : null,
+                isset($review['obfuscatedProfileId']) ? (string) $review['obfuscatedProfileId'] : null,
+                $messageId,
+            ));
+
+            return response()->json([], 200);
+        }
+
         if (is_array($notification['testNotification'] ?? null)) {
             Event::dispatch(new Events\TestNotification($notification, $packageName, $messageId));
 
@@ -138,7 +156,7 @@ class RtdnController
             return response()->json([], 200);
         }
 
-        $subscription = $this->fetchSubscription($manager, $subscriptionId, $purchaseToken);
+        $subscription = $this->fetchSubscription($manager, $purchaseToken);
         if ($subscription === null) {
             return response()->json([], 503);
         }
@@ -185,7 +203,7 @@ class RtdnController
      * Google is routinely 503 for a few seconds after sending a notification, but waiting it out
      * here costs the ack deadline; one attempt and a 503 hands the wait to Pub/Sub's own backoff.
      */
-    protected function fetchSubscription(GooglePlayManager $manager, string $subscriptionId, string $purchaseToken): ?SubscriptionResponse
+    protected function fetchSubscription(GooglePlayManager $manager, string $purchaseToken): ?SubscriptionV2Response
     {
         $attempts = (int) config('google-play-billing.rtdn.retries', 1);
         $delay = (int) config('google-play-billing.rtdn.retry_delay', 0);
@@ -193,9 +211,8 @@ class RtdnController
         for ($attempt = 1; $attempt <= max(1, $attempts); $attempt++) {
             try {
                 return $manager->validator()
-                    ->setProductId($subscriptionId)
                     ->setPurchaseToken($purchaseToken)
-                    ->validateSubscription();
+                    ->validateSubscriptionV2();
             } catch (GoogleServiceException $e) {
                 Log::warning('Google RTDN re-fetch failed.', ['attempt' => $attempt, 'error' => $e->getMessage()]);
                 if ($attempt < $attempts && $delay > 0) {
@@ -205,7 +222,6 @@ class RtdnController
         }
 
         Log::error('Google RTDN re-fetch failed; asking Pub/Sub to redeliver.', [
-            'subscriptionId' => $subscriptionId,
             'attempts' => max(1, $attempts),
         ]);
 

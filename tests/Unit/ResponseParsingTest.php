@@ -5,12 +5,11 @@ declare(strict_types=1);
 namespace Breakpoint\GooglePlay\Tests\Unit;
 
 use Breakpoint\GooglePlay\Enums\AcknowledgementState;
-use Breakpoint\GooglePlay\Enums\CancelReason;
+use Breakpoint\GooglePlay\Enums\CancellationInitiator;
 use Breakpoint\GooglePlay\Enums\ConsumptionState;
-use Breakpoint\GooglePlay\Enums\PaymentState;
 use Breakpoint\GooglePlay\Enums\PurchaseState;
+use Breakpoint\GooglePlay\Enums\SubscriptionState;
 use Breakpoint\GooglePlay\Responses\PurchaseResponse;
-use Breakpoint\GooglePlay\Responses\SubscriptionResponse;
 use Breakpoint\GooglePlay\Responses\SubscriptionV2Response;
 use Breakpoint\GooglePlay\Tests\Support\Fixtures;
 use Breakpoint\GooglePlay\Tests\TestCase;
@@ -21,80 +20,6 @@ use Breakpoint\GooglePlay\Tests\TestCase;
  */
 class ResponseParsingTest extends TestCase
 {
-    public function test_a_subscription_parses_every_promoted_field(): void
-    {
-        $response = new SubscriptionResponse(Fixtures::subscriptionPurchase([
-            'linkedPurchaseToken' => 'token-previous-999',
-            'promotionCode' => 'SPRING26',
-            'externalAccountId' => 'ext-42',
-        ]));
-
-        $this->assertTrue($response->autoRenewing);
-        $this->assertSame('US', $response->countryCode);
-        $this->assertSame('39990000', $response->priceAmountMicros);
-        $this->assertSame('USD', $response->priceCurrencyCode);
-        $this->assertSame('GPA.1111-2222-3333-44444', $response->orderId);
-        $this->assertSame('token-previous-999', $response->linkedPurchaseToken);
-        $this->assertSame('SPRING26', $response->promotionCode);
-        $this->assertSame('ext-42', $response->externalAccountId);
-        $this->assertSame(PaymentState::RECEIVED, $response->paymentState);
-        $this->assertSame(AcknowledgementState::ACKNOWLEDGED, $response->acknowledgementState);
-        $this->assertTrue($response->isAcknowledged());
-    }
-
-    public function test_subscription_dates_come_back_as_utc_carbon(): void
-    {
-        $response = new SubscriptionResponse(Fixtures::subscriptionPurchase([
-            '_started_at' => '2026-01-15 12:00:00',
-            '_expires_at' => '2027-01-15 12:00:00',
-        ]));
-
-        $this->assertSame('2026-01-15 12:00:00', $response->startedAt?->toDateTimeString());
-        $this->assertSame('2027-01-15 12:00:00', $response->expiresAt?->toDateTimeString());
-        $this->assertSame(0, $response->startedAt?->utcOffset());
-    }
-
-    public function test_a_user_cancellation_populates_the_cancellation_date(): void
-    {
-        $response = new SubscriptionResponse(Fixtures::subscriptionPurchase([
-            'userCancellationTimeMillis' => (string) (strtotime('2026-06-01 09:00:00 UTC') * 1000),
-            'cancelReason' => 0,
-        ]));
-
-        $this->assertSame('2026-06-01 09:00:00', $response->cancelledAt?->toDateTimeString());
-        $this->assertSame(CancelReason::USER, $response->cancelReason);
-    }
-
-    /**
-     * The fork's key fix: expired and canceled subscriptions omit paymentState entirely.
-     */
-    public function test_an_absent_payment_state_is_null_not_zero(): void
-    {
-        $response = new SubscriptionResponse(Fixtures::subscriptionPurchase(['paymentState' => null]));
-
-        $this->assertNull($response->paymentState);
-        $this->assertFalse($response->isInBillingGrace());
-        $this->assertFalse($response->isInTrial());
-    }
-
-    public function test_pending_and_deferred_payment_states_are_distinguished(): void
-    {
-        $grace = new SubscriptionResponse(Fixtures::subscriptionPurchase(['paymentState' => 0]));
-        $trial = new SubscriptionResponse(Fixtures::subscriptionPurchase(['paymentState' => 2]));
-
-        $this->assertTrue($grace->isInBillingGrace());
-        $this->assertFalse($grace->isInTrial());
-        $this->assertTrue($trial->isInTrial());
-        $this->assertFalse($trial->isInBillingGrace());
-    }
-
-    public function test_a_missing_expiry_does_not_blow_up(): void
-    {
-        $response = new SubscriptionResponse(Fixtures::subscriptionPurchase(['expiryTimeMillis' => null]));
-
-        $this->assertNull($response->expiresAt);
-    }
-
     /**
      * The v1 fork returned purchaseState as a string, which made the app's strict int comparison
      * unreachable and let canceled one-time purchases through. It is an enum here.
@@ -150,11 +75,187 @@ class ResponseParsingTest extends TestCase
             'outOfAppPurchaseContext' => [],
         ]));
 
-        $this->assertSame('SUBSCRIPTION_STATE_ACTIVE', $response->subscriptionState);
+        $this->assertSame(SubscriptionState::ACTIVE, $response->subscriptionState);
+        $this->assertSame('SUBSCRIPTION_STATE_ACTIVE', $response->subscriptionStateRaw);
         $this->assertSame('US', $response->regionCode);
         $this->assertSame('token-previous-999', $response->linkedPurchaseToken);
         $this->assertTrue($response->isPurchasedOutOfApp());
         $this->assertSame('2026-01-15 12:00:00', $response->startedAt?->toDateTimeString());
+        $this->assertSame('GPA.1111-2222-3333-44444', $response->latestSuccessfulOrderId());
+        $this->assertSame('com.consumedbycode.slopes.seasonpass', $response->productId());
+        $this->assertSame('seasonpass', $response->basePlanId());
+        $this->assertSame(['tier-one'], $response->offerTags());
+    }
+
+    /**
+     * v1 sends an int and v2 a string; the int cast that handled v1 read every v2 string as 0, which
+     * meant "unacknowledged" forever and a redundant acknowledge on every notification.
+     */
+    public function test_the_v2_acknowledgement_state_parses_from_its_string_form(): void
+    {
+        $acknowledged = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2());
+        $this->assertSame(AcknowledgementState::ACKNOWLEDGED, $acknowledged->acknowledgementState);
+        $this->assertTrue($acknowledged->isAcknowledged());
+
+        $pending = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'acknowledgementState' => 'ACKNOWLEDGEMENT_STATE_PENDING',
+        ]));
+        $this->assertSame(AcknowledgementState::YET_TO_BE_ACKNOWLEDGED, $pending->acknowledgementState);
+        $this->assertFalse($pending->isAcknowledged());
+
+        $unspecified = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'acknowledgementState' => 'ACKNOWLEDGEMENT_STATE_UNSPECIFIED',
+        ]));
+        $this->assertNull($unspecified->acknowledgementState);
+        $this->assertFalse($unspecified->isAcknowledged());
+    }
+
+    /**
+     * The dangerous default: a false here mass-writes "the customer turned auto-renew off" and mails
+     * them about it. Absent must stay absent, including when the plan object itself is present.
+     */
+    public function test_auto_renew_enabled_distinguishes_absent_from_false(): void
+    {
+        $this->assertTrue((new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2()))->autoRenewEnabled());
+
+        $planPresentFlagNull = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'lineItems' => [['productId' => 'a', 'expiryTime' => '2027-01-15T12:00:00Z', 'autoRenewingPlan' => []]],
+        ]));
+        $this->assertNull($planPresentFlagNull->autoRenewEnabled());
+
+        $planAbsent = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'lineItems' => [['productId' => 'a', 'expiryTime' => '2027-01-15T12:00:00Z']],
+        ]));
+        $this->assertNull($planAbsent->autoRenewEnabled());
+
+        $off = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'lineItems' => [[
+                'productId' => 'a',
+                'expiryTime' => '2027-01-15T12:00:00Z',
+                'autoRenewingPlan' => ['autoRenewEnabled' => false],
+            ]],
+        ]));
+        $this->assertFalse($off->autoRenewEnabled());
+    }
+
+    /**
+     * Four offer phases exist and only one is a trial; `basePrice` and `prorationPeriod` are paid.
+     */
+    public function test_only_the_free_trial_offer_phase_counts_as_a_trial(): void
+    {
+        $item = fn (array $phase): array => [
+            ['productId' => 'a', 'expiryTime' => '2027-01-15T12:00:00Z', 'offerPhase' => $phase],
+        ];
+
+        $trial = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2(['lineItems' => $item(['freeTrial' => []])]));
+        $this->assertTrue($trial->isInFreeTrial());
+        $this->assertFalse($trial->isInIntroductoryPrice());
+
+        $intro = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2(['lineItems' => $item(['introductoryPrice' => []])]));
+        $this->assertFalse($intro->isInFreeTrial());
+        $this->assertTrue($intro->isInIntroductoryPrice());
+
+        foreach (['basePrice', 'prorationPeriod'] as $paidPhase) {
+            $paid = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2(['lineItems' => $item([$paidPhase => []])]));
+            $this->assertFalse($paid->isInFreeTrial(), "{$paidPhase} is a paid phase, not a trial");
+            $this->assertFalse($paid->isInIntroductoryPrice());
+        }
+
+        $none = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2());
+        $this->assertFalse($none->isInFreeTrial());
+    }
+
+    /**
+     * Three of the four cancellation contexts carry no fields, so an empty object is a real answer.
+     */
+    public function test_every_cancellation_variant_is_identified_by_presence(): void
+    {
+        $variants = [
+            'userInitiatedCancellation' => CancellationInitiator::USER,
+            'systemInitiatedCancellation' => CancellationInitiator::SYSTEM,
+            'developerInitiatedCancellation' => CancellationInitiator::DEVELOPER,
+            'replacementCancellation' => CancellationInitiator::REPLACEMENT,
+        ];
+
+        foreach ($variants as $key => $expected) {
+            $response = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+                'subscriptionState' => 'SUBSCRIPTION_STATE_CANCELED',
+                'canceledStateContext' => [$key => []],
+            ]));
+
+            $this->assertSame($expected, $response->cancellationInitiator(), "{$key} with an empty body");
+        }
+
+        $withTime = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'canceledStateContext' => ['userInitiatedCancellation' => ['cancelTime' => '2026-07-01T09:30:00Z']],
+        ]));
+        $this->assertSame('2026-07-01 09:30:00', $withTime->cancelledAt()?->toDateTimeString());
+
+        // A system cancellation has no timestamp to report — don't invent one.
+        $system = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'canceledStateContext' => ['systemInitiatedCancellation' => []],
+        ]));
+        $this->assertNull($system->cancelledAt());
+
+        $none = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2());
+        $this->assertNull($none->cancellationInitiator());
+        $this->assertNull($none->cancelledAt());
+    }
+
+    public function test_the_declined_order_id_comes_from_whichever_state_context_is_present(): void
+    {
+        $grace = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'subscriptionState' => 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD',
+            'inGracePeriodStateContext' => ['renewalDeclined' => ['pendingOrderId' => 'GPA.decl-1']],
+        ]));
+        $this->assertSame('GPA.decl-1', $grace->declinedOrderId());
+
+        $hold = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'subscriptionState' => 'SUBSCRIPTION_STATE_ON_HOLD',
+            'onHoldStateContext' => ['renewalDeclined' => ['pendingOrderId' => 'GPA.decl-2']],
+        ]));
+        $this->assertSame('GPA.decl-2', $hold->declinedOrderId());
+
+        // `renewalDeclined` is an optional union member, so an empty context is legal.
+        $empty = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'inGracePeriodStateContext' => [],
+        ]));
+        $this->assertNull($empty->declinedOrderId());
+    }
+
+    public function test_an_unrecognized_subscription_state_keeps_its_raw_value(): void
+    {
+        $response = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'subscriptionState' => 'SUBSCRIPTION_STATE_SOMETHING_NEW',
+        ]));
+
+        $this->assertNull($response->subscriptionState);
+        $this->assertSame('SUBSCRIPTION_STATE_SOMETHING_NEW', $response->subscriptionStateRaw);
+    }
+
+    public function test_the_recurring_price_converts_to_micros(): void
+    {
+        $response = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2());
+
+        $this->assertSame('29990000', $response->recurringPriceMicros());
+        $this->assertSame('USD', $response->priceCurrencyCode());
+
+        $noPlan = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'lineItems' => [['productId' => 'a', 'expiryTime' => '2027-01-15T12:00:00Z']],
+        ]));
+        $this->assertNull($noPlan->recurringPriceMicros());
+        $this->assertNull($noPlan->priceCurrencyCode());
+    }
+
+    public function test_the_obfuscated_account_id_reads_from_external_account_identifiers(): void
+    {
+        $withId = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'externalAccountIdentifiers' => ['obfuscatedExternalAccountId' => '018f4e1a-0000-7000-8000-000000000000'],
+        ]));
+        $this->assertSame('018f4e1a-0000-7000-8000-000000000000', $withId->obfuscatedExternalAccountId);
+
+        // The production shape until an Android release sets it.
+        $this->assertNull((new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2()))->obfuscatedExternalAccountId);
     }
 
     /**

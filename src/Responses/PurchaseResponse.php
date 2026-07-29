@@ -23,6 +23,13 @@ class PurchaseResponse extends AbstractResponse
 
     public readonly ?string $orderId;
 
+    public readonly ?string $regionCode;
+
+    /** Only set when the client passed it to `setObfuscatedAccountId()` at purchase time. */
+    public readonly ?string $obfuscatedExternalAccountId;
+
+    public readonly ?string $obfuscatedExternalProfileId;
+
     /** @var array<string, mixed>|string|null */
     public readonly array|string|null $developerPayload;
 
@@ -34,6 +41,9 @@ class PurchaseResponse extends AbstractResponse
         $this->purchaseState = self::toEnumOrNull(PurchaseState::class, $raw->getPurchaseState());
         $this->purchasedAt = self::toDateFromMs($raw->getPurchaseTimeMillis());
         $this->orderId = self::toStringOrNull($raw->getOrderId());
+        $this->regionCode = self::toStringOrNull(self::field($raw, 'regionCode'));
+        $this->obfuscatedExternalAccountId = self::toStringOrNull(self::field($raw, 'obfuscatedExternalAccountId'));
+        $this->obfuscatedExternalProfileId = self::toStringOrNull(self::field($raw, 'obfuscatedExternalProfileId'));
         $this->developerPayload = self::decodePayload($raw->getDeveloperPayload());
     }
 

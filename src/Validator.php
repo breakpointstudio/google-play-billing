@@ -6,7 +6,6 @@ namespace Breakpoint\GooglePlay;
 
 use Breakpoint\GooglePlay\Exceptions\ValidationException;
 use Breakpoint\GooglePlay\Responses\PurchaseResponse;
-use Breakpoint\GooglePlay\Responses\SubscriptionResponse;
 use Breakpoint\GooglePlay\Responses\SubscriptionV2Response;
 use Google\Service\AndroidPublisher;
 use Google\Service\Exception as GoogleServiceException;
@@ -67,19 +66,6 @@ class Validator
     public function validatePurchase(): PurchaseResponse
     {
         return new PurchaseResponse($this->androidPublisher->purchases_products->get(
-            $this->packageName,
-            $this->require($this->productId, 'productId'),
-            $this->require($this->purchaseToken, 'purchaseToken'),
-        ));
-    }
-
-    /**
-     * @throws ValidationException
-     * @throws GoogleServiceException
-     */
-    public function validateSubscription(): SubscriptionResponse
-    {
-        return new SubscriptionResponse($this->androidPublisher->purchases_subscriptions->get(
             $this->packageName,
             $this->require($this->productId, 'productId'),
             $this->require($this->purchaseToken, 'purchaseToken'),

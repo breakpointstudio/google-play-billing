@@ -6,34 +6,10 @@ namespace Breakpoint\GooglePlay\Tests\Support;
 
 use Carbon\Carbon;
 use Google\Service\AndroidPublisher\ProductPurchase;
-use Google\Service\AndroidPublisher\SubscriptionPurchase;
 use Google\Service\AndroidPublisher\SubscriptionPurchaseV2;
 
 class Fixtures
 {
-    /**
-     * @param  array<string, mixed>  $overrides
-     */
-    public static function subscriptionPurchase(array $overrides = []): SubscriptionPurchase
-    {
-        $startedAt = Carbon::parse($overrides['_started_at'] ?? '2026-01-15 12:00:00');
-        $expiresAt = Carbon::parse($overrides['_expires_at'] ?? $startedAt->copy()->addYear()->toDateTimeString());
-        unset($overrides['_started_at'], $overrides['_expires_at']);
-
-        return new SubscriptionPurchase(array_merge([
-            'kind' => 'androidpublisher#subscriptionPurchase',
-            'startTimeMillis' => (string) ($startedAt->getTimestamp() * 1000),
-            'expiryTimeMillis' => (string) ($expiresAt->getTimestamp() * 1000),
-            'autoRenewing' => true,
-            'priceCurrencyCode' => 'USD',
-            'priceAmountMicros' => '39990000',
-            'countryCode' => 'US',
-            'paymentState' => 1,
-            'acknowledgementState' => 1,
-            'orderId' => 'GPA.1111-2222-3333-44444',
-        ], $overrides));
-    }
-
     /**
      * @param  array<string, mixed>  $overrides
      */
@@ -62,10 +38,18 @@ class Fixtures
             'subscriptionState' => 'SUBSCRIPTION_STATE_ACTIVE',
             'regionCode' => 'US',
             'startTime' => '2026-01-15T12:00:00Z',
-            'latestOrderId' => 'GPA.1111-2222-3333-44444',
             'acknowledgementState' => 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
             'lineItems' => [
-                ['productId' => 'com.consumedbycode.slopes.seasonpass', 'expiryTime' => '2027-01-15T12:00:00Z'],
+                [
+                    'productId' => 'com.consumedbycode.slopes.seasonpass',
+                    'expiryTime' => '2027-01-15T12:00:00Z',
+                    'latestSuccessfulOrderId' => 'GPA.1111-2222-3333-44444',
+                    'autoRenewingPlan' => [
+                        'autoRenewEnabled' => true,
+                        'recurringPrice' => ['currencyCode' => 'USD', 'units' => '29', 'nanos' => 990000000],
+                    ],
+                    'offerDetails' => ['basePlanId' => 'seasonpass', 'offerTags' => ['tier-one']],
+                ],
             ],
         ], $overrides));
     }

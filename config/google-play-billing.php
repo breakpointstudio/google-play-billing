@@ -54,7 +54,9 @@ return [
     */
 
     'rtdn' => [
-        'dedupe_ttl' => env('GOOGLE_PLAY_RTDN_DEDUPE_TTL', 3600),
+        // 96h, not 1h: Pub/Sub redelivers for up to 7 days, so a 1h window let late redeliveries
+        // through and double-counted the `received` metrics.
+        'dedupe_ttl' => env('GOOGLE_PLAY_RTDN_DEDUPE_TTL', 345600),
         'retries' => env('GOOGLE_PLAY_RTDN_RETRIES', 1),
         'retry_delay' => env('GOOGLE_PLAY_RTDN_RETRY_DELAY', 0),
         'push_auth' => [
