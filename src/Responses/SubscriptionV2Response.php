@@ -235,16 +235,28 @@ class SubscriptionV2Response extends AbstractResponse
         return array_values(array_map('strval', $tags ?? []));
     }
 
+    /**
+     * Only a vanity code carries a value. `oneTimeCode` is a fieldless marker, so a signup promotion
+     * can be present with no code to report — use {@see hasSignupPromotion()} for presence.
+     */
     public function signupPromotionCode(): ?string
+    {
+        $vanity = $this->signupPromotionField('vanityCode');
+
+        return $vanity === null ? null : self::toStringOrNull(self::field($vanity, 'promotionCode'));
+    }
+
+    public function hasSignupPromotion(): bool
+    {
+        return $this->signupPromotionField('vanityCode') !== null
+            || $this->signupPromotionField('oneTimeCode') !== null;
+    }
+
+    private function signupPromotionField(string $field): mixed
     {
         $promotion = $this->lineItemField('signupPromotion');
 
-        if ($promotion === null) {
-            return null;
-        }
-
-        return self::toStringOrNull(self::field($promotion, 'oneTimeCode'))
-            ?? self::toStringOrNull(self::field($promotion, 'vanityCode'));
+        return $promotion === null ? null : self::field($promotion, $field);
     }
 
     /**

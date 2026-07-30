@@ -139,6 +139,33 @@ class ResponseParsingTest extends TestCase
     }
 
     /**
+     * `oneTimeCode` is a fieldless marker object, so presence and code have to be separate questions —
+     * asking for a code returned the object itself and crashed on stringification.
+     */
+    public function test_a_signup_promotion_reports_a_code_only_when_it_has_one(): void
+    {
+        $item = fn (array $promotion): array => [
+            ['productId' => 'a', 'expiryTime' => '2027-01-15T12:00:00Z', 'signupPromotion' => $promotion],
+        ];
+
+        $vanity = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'lineItems' => $item(['vanityCode' => ['promotionCode' => 'SKIFREE']]),
+        ]));
+        $this->assertSame('SKIFREE', $vanity->signupPromotionCode());
+        $this->assertTrue($vanity->hasSignupPromotion());
+
+        $oneTime = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2([
+            'lineItems' => $item(['oneTimeCode' => []]),
+        ]));
+        $this->assertNull($oneTime->signupPromotionCode());
+        $this->assertTrue($oneTime->hasSignupPromotion());
+
+        $none = new SubscriptionV2Response(Fixtures::subscriptionPurchaseV2());
+        $this->assertNull($none->signupPromotionCode());
+        $this->assertFalse($none->hasSignupPromotion());
+    }
+
+    /**
      * Four offer phases exist and only one is a trial; `basePrice` and `prorationPeriod` are paid.
      */
     public function test_only_the_free_trial_offer_phase_counts_as_a_trial(): void
